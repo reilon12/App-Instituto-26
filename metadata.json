@@ -1,0 +1,7 @@
+{
+  "name": "Asistencia Terciario - Presentacion ",
+  "description": "Sistema de gestión de asistencia para alumnos y preceptores de un instituto terciario.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
