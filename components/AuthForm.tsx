@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { CAREERS, INITIAL_USERS, PRECEPTOR_REGISTRATION_CODES } from '../constants';
+import { CAREERS, PRECEPTOR_REGISTRATION_CODES } from '../constants';
 import { Role, User } from '../types';
 import { UserIcon, LockClosedIcon, ArrowLeftIcon, ShieldCheckIcon } from './Icons';
 
 interface AuthFormProps {
   onLogin: (user: User) => void;
   onRegister: (user: User) => void;
+  users: User[];
 }
 
-export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister }) => {
+export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister, users }) => {
   const [mode, setMode] = useState<'selection' | 'login' | 'register' | 'recover'>('selection');
   
   const [name, setName] = useState('');
@@ -31,7 +32,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister }) => {
   };
 
   const handleAlumnoPrototype = () => {
-    const user = INITIAL_USERS.find(u => u.id === 101); // Juan Perez
+    const user = users.find(u => u.id === 101); // Juan Perez
     if (user) {
       onLogin(user);
     } else {
@@ -40,7 +41,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister }) => {
   };
 
   const handlePreceptorPrototype = () => {
-    const user = INITIAL_USERS.find(u => u.id === 1); // Carlos Gomez
+    const user = users.find(u => u.id === 1); // Carlos Gomez
     if (user) {
       onLogin(user);
     } else {
@@ -52,7 +53,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister }) => {
     e.preventDefault();
     setError('');
     try {
-      const user = INITIAL_USERS.find(u => 
+      const user = users.find(u => 
           (u.email.toLowerCase() === email.toLowerCase() || u.name.toLowerCase() === email.toLowerCase()) && 
           u.password === password &&
           u.role === role &&
@@ -76,7 +77,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin, onRegister }) => {
       if (!name || !email || !password) {
           throw new Error("Por favor, completa todos los campos.");
       }
-      if (INITIAL_USERS.find(u => u.email.toLowerCase() === email.toLowerCase())) {
+      if (users.find(u => u.email.toLowerCase() === email.toLowerCase())) {
           throw new Error("Este email ya está registrado.");
       }
       

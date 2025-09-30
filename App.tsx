@@ -1,8 +1,6 @@
-
-
-
-
 import React, { useState, useEffect } from 'react';
+import { db } from './firebase';
+import { collection, onSnapshot, doc, addDoc, setDoc, updateDoc, deleteDoc, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { Role, User, AttendanceRecord, Subject, NewsItem, PrivateMessage, AttendanceStatus, JustificationFile, Notification, NotificationType, UserProfileData, Note, ForumThread, ForumReply, ForumThreadStatus, QRAttendanceSession, Coordinates, ClassSchedule } from './types';
 import { CAREERS, INITIAL_USERS, INITIAL_ATTENDANCE, SUBJECTS, NEWS_ITEMS, INITIAL_PRIVATE_MESSAGES, INITIAL_FORUM_THREADS, INITIAL_FORUM_REPLIES, ABSENCE_LIMIT, MINIMUM_PRESENTISM, CLASS_COUNT_THRESHOLD_FOR_LIBRE, CLASS_SCHEDULE, INITIAL_NOTIFICATIONS } from './constants';
 import { AuthForm } from './components/AuthForm';
@@ -45,19 +43,19 @@ const getDistance = (coord1: Coordinates, coord2: Coordinates): number => {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
   const [userProfiles, setUserProfiles] = useState<Record<number, UserProfileData>>({});
   const [userNotes, setUserNotes] = useState<Record<number, Note[]>>({});
 
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(INITIAL_ATTENDANCE);
-  const [subjects, setSubjects] = useState<Subject[]>(SUBJECTS);
-  const [newsItems, setNewsItems] = useState<NewsItem[]>(NEWS_ITEMS);
-  const [privateMessages, setPrivateMessages] = useState<PrivateMessage[]>(INITIAL_PRIVATE_MESSAGES);
-  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
-  const [forumThreads, setForumThreads] = useState<ForumThread[]>(INITIAL_FORUM_THREADS);
-  const [forumReplies, setForumReplies] = useState<ForumReply[]>(INITIAL_FORUM_REPLIES);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
+  const [privateMessages, setPrivateMessages] = useState<PrivateMessage[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [forumThreads, setForumThreads] = useState<ForumThread[]>([]);
+  const [forumReplies, setForumReplies] = useState<ForumReply[]>([]);
   const [qrSessions, setQrSessions] = useState<QRAttendanceSession[]>([]);
-  const [classSchedule, setClassSchedule] = useState<ClassSchedule[]>(CLASS_SCHEDULE);
+  const [classSchedule, setClassSchedule] = useState<ClassSchedule[]>([]);
   
   const [theme, setTheme] = useState<Theme>('celestial');
   const [borderStyle, setBorderStyle] = useState<BorderStyle>('sencillo');
@@ -65,10 +63,6 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const savedProfiles = localStorage.getItem('user-profiles');
-      if (savedProfiles) setUserProfiles(JSON.parse(savedProfiles));
-      const savedNotes = localStorage.getItem('user-notes');
-      if (savedNotes) setUserNotes(JSON.parse(savedNotes));
       const savedTheme = localStorage.getItem('app-theme') as Theme | null;
       if (savedTheme && THEMES[savedTheme]) setTheme(savedTheme);
       const savedBorderStyle = localStorage.getItem('app-border-style') as BorderStyle | null;
@@ -76,19 +70,81 @@ export default function App() {
       const savedFontStyle = localStorage.getItem('app-font-style') as FontStyle | null;
       if (savedFontStyle) setFontStyle(savedFontStyle);
     } catch (error) {
-      console.error("Failed to load data from localStorage", error);
+      console.error("Failed to load appearance data from localStorage", error);
     }
+
+    const seedDatabase = async () => {
+      if (localStorage.getItem('isDbSeeded-v2')) return;
+
+      console.log("Seeding Firestore with initial data...");
+      try {
+        const batch = writeBatch(db);
+        
+        const seedCollection = (collectionName: string, data: any[], idField: string) => {
+            data.forEach(item => {
+                const docRef = doc(db, collectionName, String(item[idField]));
+                batch.set(docRef, item);
+            });
+        };
+
+        seedCollection('users', INITIAL_USERS, 'id');
+        seedCollection('attendanceRecords', INITIAL_ATTENDANCE, 'id');
+        seedCollection('subjects', SUBJECTS, 'id');
+        seedCollection('newsItems', NEWS_ITEMS, 'id');
+        seedCollection('notifications', INITIAL_NOTIFICATIONS, 'id');
+        seedCollection('forumThreads', INITIAL_FORUM_THREADS, 'id');
+        seedCollection('forumReplies', INITIAL_FORUM_REPLIES, 'id');
+        CLASS_SCHEDULE.forEach(item => {
+            const docRef = doc(collection(db, "classSchedule")); // auto-id
+            batch.set(docRef, item);
+        });
+        
+        await batch.commit();
+        localStorage.setItem('isDbSeeded-v2', 'true');
+        console.log("Firestore seeded successfully.");
+      } catch (error) {
+        console.error("Error seeding database:", error);
+      }
+    };
+    seedDatabase();
+
+    const setupSubscription = (collectionName: string, setter: React.Dispatch<React.SetStateAction<any[]>>) => {
+      const q = collection(db, collectionName);
+      return onSnapshot(q, (snapshot) => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setter(data as any);
+      });
+    };
+
+    const unsubProfiles = onSnapshot(collection(db, 'userProfiles'), (snapshot) => {
+        const profiles: Record<number, UserProfileData> = {};
+        snapshot.docs.forEach(doc => { profiles[Number(doc.id)] = doc.data() as UserProfileData; });
+        setUserProfiles(profiles);
+    });
+    const unsubNotes = onSnapshot(collection(db, 'userNotes'), (snapshot) => {
+        const notes: Record<number, Note[]> = {};
+        snapshot.docs.forEach(doc => { notes[Number(doc.id)] = (doc.data().notes || []) as Note[]; });
+        setUserNotes(notes);
+    });
+
+    const unsubs = [
+        setupSubscription('users', setUsers),
+        setupSubscription('attendanceRecords', setAttendanceRecords),
+        setupSubscription('subjects', setSubjects),
+        setupSubscription('newsItems', setNewsItems),
+        setupSubscription('privateMessages', setPrivateMessages),
+        setupSubscription('notifications', setNotifications),
+        setupSubscription('forumThreads', setForumThreads),
+        setupSubscription('forumReplies', setForumReplies),
+        setupSubscription('qrSessions', setQrSessions),
+        setupSubscription('classSchedule', setClassSchedule),
+        unsubProfiles,
+        unsubNotes,
+    ];
+
+    return () => unsubs.forEach(unsub => unsub());
+
   }, []);
-
-  useEffect(() => {
-    try { localStorage.setItem('user-profiles', JSON.stringify(userProfiles)); }
-    catch (error) { console.error("Failed to save profile data", error); }
-  }, [userProfiles]);
-
-  useEffect(() => {
-    try { localStorage.setItem('user-notes', JSON.stringify(userNotes)); }
-    catch (error) { console.error("Failed to save notes data", error); }
-  }, [userNotes]);
   
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -105,172 +161,119 @@ export default function App() {
     localStorage.setItem('app-font-style', fontStyle);
   }, [fontStyle]);
 
-  const handleUpdateProfile = (userId: number, data: UserProfileData) => {
-    setUserProfiles(prev => ({ ...prev, [userId]: data }));
+  const handleUpdateProfile = async (userId: number, data: UserProfileData) => {
+    await setDoc(doc(db, "userProfiles", String(userId)), data, { merge: true });
   };
 
-  const handleUpdateNotes = (userId: number, notes: Note[]) => {
-    setUserNotes(prev => ({ ...prev, [userId]: notes }));
+  const handleUpdateNotes = async (userId: number, notes: Note[]) => {
+    await setDoc(doc(db, "userNotes", String(userId)), { notes });
   };
 
   const handleLogin = (user: User) => setCurrentUser(user);
-  const handleRegister = (newUser: User) => {
-    setUsers(prevUsers => [...prevUsers, newUser]);
+  
+  const handleRegister = async (newUser: User) => {
+    await setDoc(doc(db, "users", String(newUser.id)), newUser);
     setCurrentUser(newUser);
   };
-  const handleLogout = () => {
-    setCurrentUser(null);
-  };
+  const handleLogout = () => setCurrentUser(null);
   
-  const addNotification = (notificationData: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
-    const newNotification: Notification = {
-      id: `notif-${Date.now()}-${Math.random()}`,
+  const addNotification = async (notificationData: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
+    const newNotification: Omit<Notification, 'id'> = {
       timestamp: new Date().toISOString(), read: false, ...notificationData,
     };
-    setNotifications(prev => [newNotification, ...prev]);
+    await addDoc(collection(db, "notifications"), newNotification);
   };
 
-  const markNotificationsAsRead = (userId: number) => {
-    setNotifications(prev => prev.map(n => (n.userId === userId && !n.read ? { ...n, read: true } : n)));
-  };
-  
- const addAttendanceRecord = (studentId: number, status: AttendanceStatus, date: string, subjectId: string) => {
-    const prevRecords = attendanceRecords;
-    let wasAbsenceAddedOrUpdated = false;
-
-    const nextRecords = [...prevRecords];
-    const existingIndex = nextRecords.findIndex(r => r.studentId === studentId && r.date === date && r.subjectId === subjectId);
-
-    if (existingIndex !== -1) {
-        const oldStatus = nextRecords[existingIndex].status;
-        if (oldStatus !== AttendanceStatus.ABSENT && status === AttendanceStatus.ABSENT) {
-            wasAbsenceAddedOrUpdated = true;
-        }
-        nextRecords[existingIndex] = { ...nextRecords[existingIndex], status };
-    } else {
-        if (status === AttendanceStatus.ABSENT) {
-            wasAbsenceAddedOrUpdated = true;
-            const subjectName = subjects.find(s => s.id === subjectId)?.name || 'una materia';
-            addNotification({ userId: studentId, type: NotificationType.ABSENCE, text: `Se ha registrado una nueva falta.`, details: `Materia: ${subjectName}` });
-        }
-        const newRecord = { id: `att-${studentId}-${subjectId}-${date}-${Math.random()}`, studentId, subjectId, date, status };
-        nextRecords.push(newRecord);
-    }
-    
-    setAttendanceRecords(nextRecords);
-
-    if (wasAbsenceAddedOrUpdated) {
-        const subjectName = subjects.find(s => s.id === subjectId)?.name || 'Materia Desconocida';
-
-        const checkStudentStatus = (records: AttendanceRecord[]) => {
-            const studentRecordsForSubject = records.filter(r => r.studentId === studentId && r.subjectId === subjectId);
-            const total = studentRecordsForSubject.length;
-            if (total === 0) return { absences: 0, attendancePercent: 100, isLibre: false, isWarningAbsences: false, isWarningPercent: false };
-            
-            const absences = studentRecordsForSubject.filter(r => r.status === AttendanceStatus.ABSENT).length;
-            const present = studentRecordsForSubject.filter(r => r.status === AttendanceStatus.PRESENT).length;
-            const justified = studentRecordsForSubject.filter(r => r.status === AttendanceStatus.JUSTIFIED || r.status === AttendanceStatus.PENDING_JUSTIFICATION).length;
-            const attendancePercent = total > 0 ? ((present + justified) / total) * 100 : 100;
-
-            const isLibre = (absences > ABSENCE_LIMIT) || (total >= CLASS_COUNT_THRESHOLD_FOR_LIBRE && attendancePercent < MINIMUM_PRESENTISM);
-            const isWarningAbsences = (ABSENCE_LIMIT - absences) === 3;
-            const isWarningPercent = total >= CLASS_COUNT_THRESHOLD_FOR_LIBRE && attendancePercent >= MINIMUM_PRESENTISM && attendancePercent < 75;
-
-            return { absences, attendancePercent, isLibre, isWarningAbsences, isWarningPercent };
-        };
-
-        const currentState = checkStudentStatus(nextRecords);
-        const previousState = checkStudentStatus(prevRecords);
-
-        // Check for 'Libre' status change
-        if (currentState.isLibre && !previousState.isLibre) {
-            const reason = currentState.absences > ABSENCE_LIMIT ? `Has superado el límite de ${ABSENCE_LIMIT} faltas.` : `Tu presentismo (${currentState.attendancePercent.toFixed(1)}%) es menor al mínimo requerido.`;
-            addNotification({
-                userId: studentId, type: NotificationType.ATTENDANCE_STATUS_LIBRE, text: `Condición: Libre en ${subjectName}`, details: reason
-            });
-            return; // Don't send other warnings if libre
-        }
-
-        // Check for absence warning change
-        if (currentState.isWarningAbsences && !previousState.isWarningAbsences) {
-            addNotification({
-                userId: studentId, type: NotificationType.ATTENDANCE_WARNING, text: `Alerta de Asistencia en ${subjectName}`, details: `Te quedan solo 3 faltas para alcanzar el límite.`
-            });
-        }
-        
-        // Check for percentage warning change
-        if (currentState.isWarningPercent && !previousState.isWarningPercent) {
-             addNotification({
-                userId: studentId, type: NotificationType.ATTENDANCE_WARNING, text: `Alerta de Asistencia en ${subjectName}`, details: `Tu presentismo es del ${currentState.attendancePercent.toFixed(1)}%. ¡Cuidado! El mínimo es ${MINIMUM_PRESENTISM}%.`
-            });
-        }
-    }
-  };
-
-  const updateAttendanceStatus = (recordId: string, newStatus: AttendanceStatus) => {
-    setAttendanceRecords(prev => prev.map(r => (r.id === recordId ? { ...r, status: newStatus } : r)));
+  const markNotificationsAsRead = async (userId: number) => {
+    const q = query(collection(db, "notifications"), where("userId", "==", userId), where("read", "==", false));
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) return;
+    const batch = writeBatch(db);
+    snapshot.docs.forEach(document => batch.update(document.ref, { read: true }));
+    await batch.commit();
   };
   
-  const requestJustification = (recordId: string, reason: string, file: JustificationFile) => {
-    let student: User | undefined, preceptor: User | undefined, subjectName: string | undefined;
-    setAttendanceRecords(prev => prev.map(r => {
-        if (r.id === recordId) {
-            student = users.find(u => u.id === r.studentId);
-            preceptor = users.find(u => u.role === Role.PRECEPTOR && u.careerId === student?.careerId);
-            subjectName = subjects.find(s => s.id === r.subjectId)?.name || 'una materia';
-            return { ...r, status: AttendanceStatus.PENDING_JUSTIFICATION, justificationReason: reason, justificationFile: file };
-        }
-        return r;
-      })
+  const addAttendanceRecord = async (studentId: number, status: AttendanceStatus, date: string, subjectId: string) => {
+    const q = query(collection(db, "attendanceRecords"), 
+      where("studentId", "==", studentId), 
+      where("date", "==", date), 
+      where("subjectId", "==", subjectId)
     );
-    if (student && preceptor && subjectName) {
-        addNotification({ userId: preceptor.id, type: NotificationType.JUSTIFICATION_REQUEST, text: `${student.name} ha solicitado una justificación.`, details: `Materia: ${subjectName}` });
+    const querySnapshot = await getDocs(q);
+    const existingRecordDoc = querySnapshot.docs[0];
+
+    if (existingRecordDoc) {
+      if (existingRecordDoc.data().status !== status) {
+        await updateDoc(existingRecordDoc.ref, { status });
+      }
+    } else {
+      const newRecord = { 
+        id: `att-${studentId}-${subjectId}-${date}-${Math.random()}`, 
+        studentId, subjectId, date, status 
+      };
+      await setDoc(doc(db, "attendanceRecords", newRecord.id), newRecord);
     }
   };
 
-  const resolveJustificationRequest = (recordId: string, approved: boolean) => {
-    setAttendanceRecords(prev => {
-        const recordToUpdate = prev.find(r => r.id === recordId);
-        if (recordToUpdate) {
-            const subjectName = subjects.find(s => s.id === recordToUpdate.subjectId)?.name || 'una materia';
-            addNotification({ userId: recordToUpdate.studentId, type: approved ? NotificationType.JUSTIFICATION_APPROVED : NotificationType.JUSTIFICATION_REJECTED, text: `Tu solicitud de justificación ha sido ${approved ? 'aprobada' : 'rechazada'}.`, details: `Materia: ${subjectName}` });
-        }
-        return prev.map(r => r.id === recordId ? { ...r, status: approved ? AttendanceStatus.JUSTIFIED : AttendanceStatus.ABSENT, justificationReason: undefined, justificationFile: undefined } : r);
-    });
+  const updateAttendanceStatus = async (recordId: string, newStatus: AttendanceStatus) => {
+    await updateDoc(doc(db, "attendanceRecords", recordId), { status: newStatus });
+  };
+  
+  const requestJustification = async (recordId: string, reason: string, file: JustificationFile) => {
+    const recordRef = doc(db, "attendanceRecords", recordId);
+    await updateDoc(recordRef, { status: AttendanceStatus.PENDING_JUSTIFICATION, justificationReason: reason, justificationFile: file });
+    
+    const record = attendanceRecords.find(r => r.id === recordId);
+    if (record) {
+      const student = users.find(u => u.id === record.studentId);
+      const preceptor = users.find(u => u.role === Role.PRECEPTOR && u.careerId === student?.careerId);
+      const subjectName = subjects.find(s => s.id === record.subjectId)?.name || 'una materia';
+      if (student && preceptor) {
+        addNotification({ userId: preceptor.id, type: NotificationType.JUSTIFICATION_REQUEST, text: `${student.name} ha solicitado una justificación.`, details: `Materia: ${subjectName}` });
+      }
+    }
   };
 
-  const addNewsItem = (item: Omit<NewsItem, 'id'>) => {
-    const newNewsItem: NewsItem = { id: `news-${Date.now()}`, ...item };
-    setNewsItems(prev => [newNewsItem, ...prev]);
+  const resolveJustificationRequest = async (recordId: string, approved: boolean) => {
+    const record = attendanceRecords.find(r => r.id === recordId);
+    if (record) {
+      const subjectName = subjects.find(s => s.id === record.subjectId)?.name || 'una materia';
+      addNotification({ userId: record.studentId, type: approved ? NotificationType.JUSTIFICATION_APPROVED : NotificationType.JUSTIFICATION_REJECTED, text: `Tu solicitud de justificación ha sido ${approved ? 'aprobada' : 'rechazada'}.`, details: `Materia: ${subjectName}` });
+      await updateDoc(doc(db, "attendanceRecords", recordId), { status: approved ? AttendanceStatus.JUSTIFIED : AttendanceStatus.ABSENT, justificationReason: '', justificationFile: null });
+    }
+  };
+
+  const addNewsItem = async (item: Omit<NewsItem, 'id'>) => {
+    const docRef = await addDoc(collection(db, "newsItems"), item);
+    const newNewsItem = { id: docRef.id, ...item };
     const targetStudents = users.filter(u => u.role === Role.STUDENT && (!newNewsItem.careerId || u.careerId === newNewsItem.careerId) && (!newNewsItem.year || u.year === newNewsItem.year));
     targetStudents.forEach(student => addNotification({ userId: student.id, type: NotificationType.ANNOUNCEMENT, text: 'Nuevo anuncio', details: newNewsItem.text }));
   };
   
-  const deleteNewsItem = (id: string) => setNewsItems(prev => prev.filter(item => item.id !== id));
+  const deleteNewsItem = async (id: string) => await deleteDoc(doc(db, "newsItems", id));
 
-  const sendPrivateMessage = (senderId: number, receiverId: number, text: string) => {
-    const newMessage: PrivateMessage = { id: `msg-${Date.now()}`, senderId, receiverId, text, timestamp: new Date().toISOString(), read: false };
-    setPrivateMessages(prev => [...prev, newMessage]);
+  const sendPrivateMessage = async (senderId: number, receiverId: number, text: string) => {
+    const newMessage: Omit<PrivateMessage, 'id'> = { senderId, receiverId, text, timestamp: new Date().toISOString(), read: false };
+    await addDoc(collection(db, "privateMessages"), newMessage);
   };
   
-  const markMessagesAsRead = (readerId: number, chatterId: number) => {
-    setPrivateMessages(prev => prev.map(msg => msg.receiverId === readerId && msg.senderId === chatterId && !msg.read ? { ...msg, read: true } : msg));
+  const markMessagesAsRead = async (readerId: number, chatterId: number) => {
+    const q = query(collection(db, "privateMessages"), where("receiverId", "==", readerId), where("senderId", "==", chatterId), where("read", "==", false));
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) return;
+    const batch = writeBatch(db);
+    snapshot.docs.forEach(document => batch.update(document.ref, { read: true }));
+    await batch.commit();
   };
 
-  // --- QR Attendance Handlers ---
   const handleCreateQRSession = async (subjectId: string): Promise<QRAttendanceSession> => {
       if (!currentUser || currentUser.role !== Role.PRECEPTOR) throw new Error("Unauthorized");
       const now = new Date();
       const newSession: QRAttendanceSession = {
-          id: `qr-session-${Date.now()}`,
-          subjectId,
-          preceptorId: currentUser.id,
-          createdAt: now.toISOString(),
-          expiresAt: new Date(now.getTime() + QR_SESSION_DURATION_MS).toISOString(),
-          location: INSTITUTE_LOCATION,
-          radius: VALID_RADIUS_METERS,
+          id: `qr-session-${Date.now()}`, subjectId, preceptorId: currentUser.id, createdAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + QR_SESSION_DURATION_MS).toISOString(), location: INSTITUTE_LOCATION, radius: VALID_RADIUS_METERS,
       };
-      setQrSessions(prev => [...prev, newSession]);
+      await setDoc(doc(db, 'qrSessions', newSession.id), newSession);
       return newSession;
   };
   
@@ -281,81 +284,56 @@ export default function App() {
           const session = qrSessions.find(s => s.id === sessionId);
           if (!session) return 'error_invalid';
           if (new Date().getTime() > new Date(session.expiresAt).getTime()) return 'error_expired';
-          
-          const distance = getDistance(location, session.location);
-          if (distance > session.radius) return 'error_location';
-
+          if (getDistance(location, session.location) > session.radius) return 'error_location';
           addAttendanceRecord(currentUser.id, AttendanceStatus.PRESENT, new Date().toISOString().split('T')[0], session.subjectId);
           return 'success';
-          
       } catch (e) {
-          console.error("QR verification failed", e);
           return 'error_invalid';
       }
   };
-
   
-  // Forum handlers
-  const addForumThread = (thread: Omit<ForumThread, 'id' | 'timestamp' | 'status' | 'isLocked'>) => {
-    const newThread: ForumThread = {
-      ...thread,
-      id: `thread-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      status: ForumThreadStatus.PENDING,
-      isLocked: false,
+  const addForumThread = async (thread: Omit<ForumThread, 'id' | 'timestamp' | 'status' | 'isLocked'>) => {
+    const newThread: Omit<ForumThread, 'id'> = {
+      ...thread, timestamp: new Date().toISOString(), status: ForumThreadStatus.PENDING, isLocked: false,
     };
-    setForumThreads(prev => [newThread, ...prev]);
+    await addDoc(collection(db, 'forumThreads'), newThread);
   };
 
-  const editForumThread = (threadId: string, newTitle: string, newContent: string) => {
-    setForumThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle, content: newContent, status: ForumThreadStatus.PENDING, rejectionReason: undefined } : t));
+  const editForumThread = async (threadId: string, newTitle: string, newContent: string) => {
+    await updateDoc(doc(db, "forumThreads", threadId), { title: newTitle, content: newContent, status: ForumThreadStatus.PENDING, rejectionReason: '' });
   };
 
-  const addForumReply = (reply: Omit<ForumReply, 'id' | 'timestamp'>) => {
-    const newReply: ForumReply = {
-      ...reply,
-      id: `reply-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-    };
-    setForumReplies(prev => [...prev, newReply]);
+  const addForumReply = async (reply: Omit<ForumReply, 'id' | 'timestamp'>) => {
+    const newReply: Omit<ForumReply, 'id'> = { ...reply, timestamp: new Date().toISOString() };
+    await addDoc(collection(db, 'forumReplies'), newReply);
   };
 
-  const updateForumThreadStatus = (threadId: string, status: ForumThreadStatus, reason?: string) => {
-    let threadToUpdate: ForumThread | undefined;
-    setForumThreads(prev =>
-      prev.map(t => {
-        if (t.id === threadId) {
-          threadToUpdate = { ...t, status, rejectionReason: reason || t.rejectionReason };
-          return threadToUpdate;
-        }
-        return t;
-      })
-    );
+  const updateForumThreadStatus = async (threadId: string, status: ForumThreadStatus, reason?: string) => {
+    await updateDoc(doc(db, 'forumThreads', threadId), { status, rejectionReason: reason || '' });
+    const threadToUpdate = forumThreads.find(t => t.id === threadId);
     if (threadToUpdate) {
-        const authorId = threadToUpdate.authorId;
-        const threadTitle = threadToUpdate.title;
-        if (status === ForumThreadStatus.APPROVED) {
-            addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_APPROVED, text: 'Tu publicación del foro ha sido aprobada.', details: `Título: ${threadTitle}` });
-        } else if (status === ForumThreadStatus.REJECTED) {
-            addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_REJECTED, text: 'Tu publicación del foro ha sido rechazada.', details: reason || `Título: ${threadTitle}` });
-        } else if (status === ForumThreadStatus.NEEDS_REVISION) {
-            addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_NEEDS_REVISION, text: 'Se solicitaron cambios en tu publicación.', details: `Motivo: ${reason}` });
-        }
+        const { authorId, title } = threadToUpdate;
+        if (status === ForumThreadStatus.APPROVED) addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_APPROVED, text: 'Tu publicación del foro ha sido aprobada.', details: `Título: ${title}` });
+        else if (status === ForumThreadStatus.REJECTED) addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_REJECTED, text: 'Tu publicación del foro ha sido rechazada.', details: reason || `Título: ${title}` });
+        else if (status === ForumThreadStatus.NEEDS_REVISION) addNotification({ userId: authorId, type: NotificationType.FORUM_THREAD_NEEDS_REVISION, text: 'Se solicitaron cambios en tu publicación.', details: `Motivo: ${reason}` });
     }
   };
   
-  const toggleLockForumThread = (threadId: string) => {
-    setForumThreads(prev => prev.map(t => t.id === threadId ? { ...t, isLocked: !t.isLocked } : t));
+  const toggleLockForumThread = async (threadId: string) => {
+    const thread = forumThreads.find(t => t.id === threadId);
+    if (thread) await updateDoc(doc(db, "forumThreads", threadId), { isLocked: !thread.isLocked });
   };
 
-  const deleteForumThread = (threadId: string) => {
-    setForumThreads(prev => prev.filter(t => t.id !== threadId));
-    setForumReplies(prev => prev.filter(r => r.threadId !== threadId));
+  const deleteForumThread = async (threadId: string) => {
+    await deleteDoc(doc(db, "forumThreads", threadId));
+    const repliesToDelete = query(collection(db, "forumReplies"), where("threadId", "==", threadId));
+    const snapshot = await getDocs(repliesToDelete);
+    const batch = writeBatch(db);
+    snapshot.docs.forEach(document => batch.delete(document.ref));
+    await batch.commit();
   };
   
-  const deleteForumReply = (replyId: string) => {
-    setForumReplies(prev => prev.filter(r => r.id !== replyId));
-  };
+  const deleteForumReply = async (replyId: string) => await deleteDoc(doc(db, "forumReplies", replyId));
 
   return (
     <div className="min-h-screen text-[--color-text-primary] transition-colors duration-500">
@@ -432,7 +410,7 @@ export default function App() {
             />
           )
       ) : (
-        <AuthForm onLogin={handleLogin} onRegister={handleRegister} />
+        <AuthForm onLogin={handleLogin} onRegister={handleRegister} users={users} />
       )}
     </div>
   );
